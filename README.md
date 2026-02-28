@@ -16,3 +16,7 @@ A tiny, composable cognitive prosthetic
 * Legal
 * General/router (what to link next)
 
+## Architecture
+* Transformer with multi-headed attention
+* Internal recursion until the latent vector stabilizes (with stop-limit)
+* 
