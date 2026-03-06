@@ -1,0 +1,7 @@
+venv/
+checkpoints/
+__pycache__/
+*.pyc
+train_text.txt
+tokenizer.model
+tokenizer.vocab
