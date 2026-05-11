@@ -19,16 +19,18 @@ The model is intentionally a **translator**, not a general chat agent. Its prima
 | Item | Target |
 | --- | --- |
 | Architecture | encoder-decoder Transformer |
-| Parameter budget | ~100M trainable parameters |
-| Context window | 2,048 source tokens per segment |
-| Output | autoregressive target tokens |
+| Parameter budget | roughly 100M trainable parameters; not a hard cap |
+| Input context window | 2,048 source/input tokens per segment |
+| Output | autoregressive target tokens; target length is limited separately at decode time |
 | Primary tokenizer | shared SentencePiece/BPE vocabulary |
 | Primary training mode | supervised seq2seq translation + distillation |
 | Deployment target | local workstation first, edge/mobile after quantization |
 
+This translation spec supersedes the older 128-dimensional Thunk prototype assumptions. Use 512-dimensional encoder states as the default representation and only revisit smaller dimensions if deployment measurements require it.
+
 ### 2.1 Reference Configuration
 
-This is the concrete v0 architecture unless experiments prove a different shape is better.
+This is the concrete v0 architecture unless experiments prove a different shape is better. The exact parameter count may move above or below 100M if quality, latency, or implementation simplicity justify it.
 
 | Parameter | Value |
 | --- | ---: |
@@ -136,7 +138,7 @@ Each decoder block contains:
 
 Use MHA in v0.
 
-For the 100M translation model:
+For the rough 100M-class translation model:
 
 - 8 heads
 - 64 dimensions per head
@@ -262,7 +264,7 @@ Because the architecture is encoder-decoder, the encoder output can serve two jo
 Default embedding strategy:
 
 - mean-pool or attention-pool final encoder states;
-- optionally project from 512 dimensions to a smaller store dimension such as 128 or 256;
+- store pooled encoder embeddings at 512 dimensions by default; only add a projection if a later deployment/runtime requires it;
 - store embeddings with source text, target text, tags, provenance, and quality metadata.
 
 Memory is not required for the first standalone translation baseline, but the model should expose encoder embeddings so later systems can use the same model for both semantic search and generation.
@@ -274,8 +276,8 @@ Inference flow:
 1. normalize input;
 2. prepend source, target, task, and quality tags;
 3. tokenize;
-4. encode up to 2,048 source tokens;
-5. decode target tokens autoregressively;
+4. encode up to 2,048 source/input tokens;
+5. decode target tokens autoregressively under a separate max target length;
 6. detokenize;
 7. optionally validate output with domain-specific checks.
 
@@ -309,8 +311,9 @@ Deployment targets:
 | `thunk-translate-fp16` | reference quality | FP16/BF16 weights |
 | `thunk-translate-int8` | default local/mobile runtime | INT8 weight-only or dynamic INT8 |
 | `thunk-translate-int4` | experimental small/fast runtime | INT4 weight-only, AWQ/GPTQ-style |
+| `thunk-translate-turboquant` | candidate optimized runtime if Google's TurboQuant technique applies | TBD after paper/runtime validation |
 
-Open clarification: if "turbo-quant" refers to a specific algorithm, runtime, or package, define it before implementation. Until then, treat it as the optimized quantized export path, with INT8 as the stable target and INT4 as experimental.
+TurboQuant note: "turbo-quant" refers to the recent Google model-performance paper/technique, not a generic name for quantization. Treat it as a candidate optimization in the v2 export/runtime phase, not as a dependency for the baseline architecture. Before implementation, read and cite the exact paper, then verify that the technique applies to this encoder-decoder shape, cross-attention, target hardware, and chosen runtime. If applicable, compare a TurboQuant build against FP16, INT8, and INT4 on quality, latency, memory, and output stability. If not applicable, record the reason and keep the standard quantized exports.
 
 ## 11. Evaluation
 
@@ -338,13 +341,13 @@ Operational targets:
 - pass rate on curated task suites;
 - exact preservation of identifiers unless instructed otherwise;
 - no invented citations, imports, flags, or APIs in exactness-preserving mode;
-- latency and memory measured separately for FP16, INT8, and INT4 exports.
+- latency and memory measured separately for FP16, INT8, INT4, and any TurboQuant export.
 
 ## 12. Milestones
 
 ### v0: Baseline Translator
 
-- implement the 100M encoder-decoder Transformer;
+- implement the rough 100M-class encoder-decoder Transformer;
 - train tokenizer;
 - train on a small curated translation/paraphrase/code dataset;
 - support required control tags;
@@ -362,6 +365,7 @@ Operational targets:
 - export FP16 reference model;
 - export stable INT8 model;
 - evaluate experimental INT4 model;
+- evaluate Google's TurboQuant technique if it applies to the chosen architecture/runtime;
 - document quality/latency/size tradeoffs.
 
 ### v3: Memory-Enabled Translator
@@ -370,11 +374,17 @@ Operational targets:
 - use retrieved examples for document/style consistency;
 - add write policy and provenance metadata for stored translations.
 
-## 13. Open Questions
+## 13. Resolved Clarifications and Open Questions
 
-1. Is the 100M parameter target a hard ceiling, or is +/-5% acceptable?
-2. Should the context limit mean 2,048 source tokens only, or 2,048 total source+target tokens?
-3. Should v0 prioritize English/code translation over foreign-language translation?
-4. Which exact non-English languages are first-class targets beyond the generic `<src:foreign>` / `<tgt:foreign>` tags?
-5. Does "turbo-quant" mean a specific quantization technique/runtime, or just the general optimized quantized build?
-6. Should encoder embeddings be stored at 512 dimensions, or projected down to the older 128-dimensional Thunk space for compatibility?
+Resolved clarifications:
+
+- The ~100M parameter target is a rough scale target, not a hard ceiling.
+- The 2K context window means 2,048 input/source tokens; generated target length is controlled separately.
+- TurboQuant refers to the recent Google model-performance technique and should be evaluated for applicability.
+- Use 512-dimensional encoder embeddings by default; ignore prior 128-dimensional Thunk compatibility unless a future constraint reintroduces it.
+
+Open questions:
+
+1. Should v0 prioritize English/code translation over foreign-language translation?
+2. Which exact non-English languages are first-class targets beyond the generic `<src:foreign>` / `<tgt:foreign>` tags?
+3. Which exact Google TurboQuant paper/version and implementation should be used for the applicability review?
