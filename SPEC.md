@@ -66,7 +66,7 @@ source text/code/document
 [shared tokenizer]
         |
         v
-[source tokens + control tags]
+[source tokens + source/target tags]
         |
         v
 +-----------------------------+
@@ -155,17 +155,17 @@ Rationale:
 
 ## 4. Control Tags and Translation Interface
 
-All tasks use explicit control tags so one model can learn multiple translation directions.
+Use minimal language tags so one model can learn multiple translation directions without a large control vocabulary. The source/target pair and the input itself should imply whether the operation is paraphrase, explanation, code generation, code porting, or natural-language translation.
 
-Example tag pattern:
+Example inputs:
 
 ```text
-<src:english> <tgt:python> <task:generate_code>
+<src:english> <tgt:python>
 Write a CLI that renames all .jpeg files in the current directory to .jpg.
 ```
 
 ```text
-<src:bash> <tgt:powershell> <task:translate_code>
+<src:bash> <tgt:powershell>
 for f in *.jpeg; do mv "$f" "${f%.jpeg}.jpg"; done
 ```
 
@@ -173,10 +173,8 @@ Recommended reserved tags:
 
 - source tags: `<src:english>`, `<src:python>`, `<src:typescript>`, `<src:bash>`, `<src:cmd>`, `<src:powershell>`, `<src:lean>`, `<src:foreign>`
 - target tags: `<tgt:english>`, `<tgt:python>`, `<tgt:typescript>`, `<tgt:bash>`, `<tgt:cmd>`, `<tgt:powershell>`, `<tgt:lean>`, `<tgt:foreign>`
-- task tags: `<task:translate>`, `<task:paraphrase>`, `<task:explain>`, `<task:generate_code>`, `<task:port_code>`, `<task:formalize>`, `<task:summarize_equivalent>`
-- quality tags: `<literal>`, `<semantic>`, `<concise>`, `<verbose>`, `<preserve_format>`
 
-The target language tag is mandatory. Source tags should be present whenever known.
+The target language tag is mandatory. Source tags should be present whenever known. Do not reserve task tags or quality tags in v0; they add surface area without a clear need. Reconsider only if evaluation shows source/target tags are not enough to disambiguate important translation behavior.
 
 ## 5. Tokenization
 
@@ -188,7 +186,7 @@ Default tokenizer requirements:
 - 32k vocabulary for v0
 - byte fallback or equivalent unknown-character strategy
 - preserve whitespace-sensitive code structure
-- reserve explicit language/task/control tags
+- reserve only explicit source/target language tags
 - train on the same curated mixture used for model pretraining/fine-tuning
 
 Code tokenization must preserve exact spelling and indentation well enough for generated code to be executable after detokenization.
@@ -200,7 +198,7 @@ Code tokenization must preserve exact spelling and indentation well enough for g
 Train on parallel pairs:
 
 ```text
-(source tokens + control tags) -> target tokens
+(source tokens + source/target language tags) -> target tokens
 ```
 
 The decoder is trained with teacher forcing and standard next-token cross entropy.
@@ -274,7 +272,7 @@ Memory is not required for the first standalone translation baseline, but the mo
 Inference flow:
 
 1. normalize input;
-2. prepend source, target, task, and quality tags;
+2. prepend source and target language tags;
 3. tokenize;
 4. encode up to 2,048 source/input tokens;
 5. decode target tokens autoregressively under a separate max target length;
@@ -350,7 +348,7 @@ Operational targets:
 - implement the rough 100M-class encoder-decoder Transformer;
 - train tokenizer;
 - train on a small curated translation/paraphrase/code dataset;
-- support required control tags;
+- support required source/target language tags;
 - evaluate English <-> code/script and English -> English paraphrase.
 
 ### v1: Curated Multi-Domain Translator
