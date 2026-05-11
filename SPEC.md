@@ -12,7 +12,9 @@ Thunk is a compact translation model for converting meaning between equivalent r
 - English -> foreign language
 - document -> equivalent document in another style, language, or formalism
 
-The model is intentionally a **translator**, not a general chat agent. Its primary job is to preserve meaning while changing surface form, language, programming language, style, or level of formality.
+The model is intentionally a **translator**, not a general chat agent.
+Its primary job is to **preserve meaning while changing surface form, language, programming language, style, or level of formality**.
+
 
 ## 2. Target Model
 
@@ -147,15 +149,15 @@ For the rough 100M-class translation model:
 - full MHA for decoder cross-attention
 
 Rationale:
-
 - translation needs multiple simultaneous alignments: syntax, semantics, idioms, identifiers, formatting, and target-language constraints;
 - cross-attention is the core mechanism that makes encoder-decoder translation work;
 - 8 x 64 is a standard, hardware-friendly split for `d_model=512`;
 - MQA/GQA can be evaluated later as an inference optimization, but should not be the first training baseline.
 
+
 ## 4. Control Tags and Translation Interface
 
-Use minimal language tags so one model can learn multiple translation directions without a large control vocabulary. The source/target pair and the input itself should imply whether the operation is paraphrase, explanation, code generation, code porting, or natural-language translation.
+Use minimal language tags so one model can learn multiple translation directions without a large control vocabulary.
 
 Example inputs:
 
@@ -171,10 +173,12 @@ for f in *.jpeg; do mv "$f" "${f%.jpeg}.jpg"; done
 
 Recommended reserved tags:
 
-- source tags: `<src:english>`, `<src:python>`, `<src:typescript>`, `<src:bash>`, `<src:cmd>`, `<src:powershell>`, `<src:lean>`, `<src:foreign>`
-- target tags: `<tgt:english>`, `<tgt:python>`, `<tgt:typescript>`, `<tgt:bash>`, `<tgt:cmd>`, `<tgt:powershell>`, `<tgt:lean>`, `<tgt:foreign>`
+- source tags: `<src:english>`, `<src:python>`, `<src:typescript>`, `<src:bash>`, `<src:cmd>`, `<src:powershell>`, `<src:lean>`, `<src:hebrew>`, `<src:greek>`, `<src:latin>`, `<src:aramaic>`, etc.
+- target tags: `<tgt:english>`, `<tgt:python>`, `<tgt:typescript>`, `<tgt:bash>`, `<tgt:cmd>`, `<tgt:powershell>`, `<tgt:lean>`, `<tgt:hebrew>`, `<tgt:greek>`, `<tgt:latin>`, `<tgt:aramaic>`, etc.
 
-The target language tag is mandatory. Source tags should be present whenever known. Do not reserve task tags or quality tags in v0; they add surface area without a clear need. Reconsider only if evaluation shows source/target tags are not enough to disambiguate important translation behavior.
+The target language tag is mandatory.
+Source tags should be present whenever known.
+
 
 ## 5. Tokenization
 
@@ -191,6 +195,7 @@ Default tokenizer requirements:
 
 Code tokenization must preserve exact spelling and indentation well enough for generated code to be executable after detokenization.
 
+
 ## 6. Training Objectives
 
 ### 6.1 Primary Objective: Seq2Seq Cross Entropy
@@ -203,10 +208,14 @@ Train on parallel pairs:
 
 The decoder is trained with teacher forcing and standard next-token cross entropy.
 
+Training proceeds in three phases:
+- Phase 1: self -> self training, where each document is reconstructed from itself.
+- Phase 2: self -> equivalent translation of source material, such as English -> code, code -> English, English -> English paraphrase, or English -> foreign language.
+- Phase 3: distillation training on verifiable input -> output pairs.
+
 ### 6.2 Auxiliary Objectives
 
 Use auxiliary tasks only when they improve translation quality:
-
 - denoising autoencoding: corrupted input -> original input
 - semantic paraphrase: document -> equivalent document
 - round-trip consistency: A -> B -> A should preserve meaning
@@ -215,8 +224,7 @@ Use auxiliary tasks only when they improve translation quality:
 
 ### 6.3 Distillation
 
-Distill common high-value tasks from stronger teacher systems:
-
+Distill common high-value tasks from stronger teacher systems using verifiable input -> output pairs:
 - English -> shell script
 - shell script -> English
 - bash -> PowerShell
@@ -228,29 +236,25 @@ Distill common high-value tasks from stronger teacher systems:
 
 Distillation data must be filtered for correctness, license compatibility, and semantic equivalence.
 
+
 ## 7. Data Scope
 
 The corpus should be curated for high signal rather than web scale.
 
 Primary domains:
-
-- English prose, especially durable/high-value works
+- English papers, literature and masterwork especially durable/high-value works
+  - bonus for books and papers that have high-quality translations in multiple languages
 - multiple Bible translations where licensing permits
-- foundational literature and masterworks
-- high-value scientific papers, especially with trusted translations
+  - include original language versions
+- high-value scientific papers
+  - especially with trusted translations
 - Lean proofs and formal statements
 - TypeScript
 - Python
 - bash, cmd, and PowerShell
-- ubiquitous open-source codebases with compatible licenses
+- ubiquitous, top-tier open-source codebases
 - task-oriented script pairs and explanations
 
-Initial restrictions:
-
-- English is the primary natural language hub.
-- Non-English support is translation to/from English first, not full many-to-many translation.
-- Prefer high-quality aligned pairs over noisy scraped text.
-- Do not train on code or prose whose license forbids model training or redistribution of derived artifacts.
 
 ## 8. Memory and Semantic Search Hook
 

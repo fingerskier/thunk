@@ -1,5 +1,6 @@
 # thunk
 A tiny, composable cognitive prosthetic
+> ... we're not trying to compact an LLM into an SLM but make a tool that is local and lightning-fast for translation tasks that can integrate with an LLM workflow
 
 
 ## Idears
