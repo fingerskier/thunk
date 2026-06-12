@@ -332,8 +332,8 @@ Long documents should be chunked by semantic boundaries, translated per segment,
 | Surface | Runtime | Notes |
 | --- | --- | --- |
 | Desktop CPU/GPU | **CTranslate2** | the standard production runtime for encoder-decoder MT (OPUS-MT, NLLB, MADLAD, faster-whisper, Argos/LibreTranslate); int8 ~3.5x faster than fp32 on CPU; actively maintained again (v4.8.0, June 2026, with T5Gemma/T5Gemma2 support and ROCm added). ONNX Runtime (`ORTModelForSeq2SeqLM`) is the fallback |
-| Mobile | **ExecuTorch** (XNNPACK / KleidiAI) or ONNX Runtime Mobile | the Llama 3.2 1B/3B edge path; T5-class export via optimum-executorch (young); supports shared/tied embedding storage and 8-bit embedding + 4-bit linear export |
-| Browser | Bergamot/Marian WASM precedent; transformers.js (WASM q8; WebGPU still rough for seq2seq) | Firefox ships ~17MB int8 encoder-decoder translators in WASM to hundreds of millions of users — existence proof for the browser target |
+| Mobile | **ONNX Runtime Mobile** today; **ExecuTorch** (XNNPACK / KleidiAI) as the forward bet | ORT mobile is mature (XNNPACK/NNAPI/Core ML EPs, int8 on the CPU EP, well-trodden seq2seq export); ExecuTorch went 1.0 GA Oct 2025 and exports T5-class models via optimum-executorch, but that exporter is v0.1.0 — promising, not proven. CTranslate2 has no mobile story |
+| Browser | Bergamot/Marian WASM precedent; transformers.js (q8 on WASM is reliable; WebGPU now ships in all major browsers and the seq2seq q8-decoder bug was fixed in 2025) | Firefox ships ~20 MiB int8 encoder-decoder translators in WASM to hundreds of millions of users — existence proof for the browser target |
 
 llama.cpp/GGUF supports T5-class encoder-decoders in the CLI/library (not in `llama-server`), so a GGUF export is a nice-to-have, not a primary path.
 
