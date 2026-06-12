@@ -62,17 +62,31 @@ directions, both ways:
 Swap in real parallel data (SPEC §7) by replacing `build_corpus()` — the rest of
 the pipeline is agnostic to where pairs come from.
 
-## Training (`train.py`, SPEC §6)
+## Training (`train.py`, `optim.py`, SPEC §6)
 
-Phase-2 supervised seq2seq with teacher forcing, label smoothing (0.1),
-AdamW with decoupled weight decay (none on norms/embeddings), gradient clipping,
-and a warmup-stable-decay LR schedule (SPEC §6.4). Evaluation reports val loss
-**and exact-match decoding accuracy**, since every pair is verifiable.
+Two phases (SPEC §6.1):
+
+1. **Denoising pretrain** — UL2-style span corruption (R-denoiser) mixed with
+   prefix-LM (S-denoiser) on the monolingual side of the corpus (control tags
+   stripped, texts packed into fixed-length blocks). Corrupted spans are
+   replaced by reserved `<extra_id_i>` sentinels and reconstructed by the
+   decoder. The encoder learns representations before it sees any translation
+   tag.
+2. **Supervised seq2seq** — teacher forcing with label smoothing (0.1) on the
+   parallel pairs, continuing from the pretrained weights.
+
+Optimizer is **Muon on the hidden 2D weight matrices + AdamW on embeddings,
+norms, and the tied head** (SPEC §6.4), using `torch.optim.Muon` (PyTorch
+2.12); `--optimizer adamw` selects the documented single-AdamW fallback. Both
+phases use gradient clipping and a warmup-stable-decay LR schedule. Translation
+evaluation reports val loss **and exact-match decoding accuracy**, since every
+pair is verifiable.
 
 ```bash
 pip install -r requirements.txt
-python train.py                 # full base-training run (small config)
-python train.py --steps 800     # shorter run
+python train.py                  # full run: denoising pretrain + supervised
+python train.py --no-pretrain    # skip Phase 1
+python train.py --optimizer adamw
 ```
 
 Checkpoints are written to `checkpoints/` (git-ignored).
@@ -95,8 +109,8 @@ Greedy by default; `--beam N` enables beam search (SPEC §9 decoding defaults).
 ## Status vs. SPEC milestones
 
 This is the **v0 baseline** (SPEC §12): the architecture, control-tag interface,
-shared tokenizer, supervised seq2seq training loop, the encoder-embedding hook,
-and greedy/beam decoding. Out of scope for v0 and left for later milestones:
-denoising pretrain (Phase 1), teacher distillation (Phase 3), preference
-optimization (Phase 4), the QE/execution data gate, Muon optimizer, Matryoshka
+shared tokenizer, denoising pretrain (Phase 1) + supervised seq2seq (Phase 2),
+the Muon+AdamW optimizer split (§6.4), the encoder-embedding hook, and
+greedy/beam decoding. Left for later milestones: teacher distillation (Phase 3),
+preference optimization (Phase 4), the QE/execution data gate, Matryoshka
 contrastive training, and quantized exports.

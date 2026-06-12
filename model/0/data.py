@@ -177,6 +177,114 @@ def write_tokenizer_corpus(pairs: List[Pair], path: str):
             f.write(tgt + "\n")
 
 
+def monolingual_texts(pairs: List[Pair]) -> List[str]:
+    """Unique raw texts from both sides of the corpus, control tags stripped.
+
+    This is the monolingual material for Phase-1 denoising pretrain (SPEC.md
+    Section 6.1): the encoder learns representations before it ever sees a
+    translation tag.
+    """
+    seen, texts = set(), []
+    for src, tgt in pairs:
+        raw_src = src.split(">", 2)[-1].strip()  # drop "<src:..> <tgt:..>"
+        for t in (raw_src, tgt):
+            if t and t not in seen:
+                seen.add(t)
+                texts.append(t)
+    return texts
+
+
+def pack_tokens(texts: List[str], tok: Tokenizer, block: int, seed: int = 0
+                ) -> List[List[int]]:
+    """Tokenize and pack monolingual texts into fixed-length blocks (LM packing)."""
+    rng = random.Random(seed)
+    order = list(range(len(texts)))
+    rng.shuffle(order)
+    stream: List[int] = []
+    for i in order:
+        stream.extend(tok.encode(texts[i]))
+        stream.append(tok.eos_id)
+    blocks = [stream[i:i + block] for i in range(0, len(stream) - block, block)]
+    return blocks
+
+
+def _random_spans_mask(length, rate, mean_span, rng):
+    """T5-style noise mask: ~rate of tokens marked noise, grouped into spans."""
+    num_noise = min(max(1, round(length * rate)), length - 1)
+    num_spans = max(1, round(num_noise / mean_span))
+
+    def segment(total, pieces):
+        pieces = min(pieces, total)
+        if pieces <= 1:
+            return [total]
+        cuts = sorted(rng.sample(range(1, total), pieces - 1))
+        seg, prev = [], 0
+        for c in cuts:
+            seg.append(c - prev)
+            prev = c
+        seg.append(total - prev)
+        return seg
+
+    noise = segment(num_noise, num_spans)
+    nonnoise = segment(length - num_noise, len(noise))
+    mask = []
+    for nn, ns in zip(nonnoise, noise):
+        mask += [False] * nn + [True] * ns
+    mask = mask[:length] + [False] * (length - len(mask))
+    return mask
+
+
+class DenoisingDataset(Dataset):
+    """Phase-1 denoising pretrain examples (SPEC.md Section 6.1).
+
+    Mixes two UL2 denoisers: span corruption (R-denoiser, the default) where
+    corrupted spans are replaced by sentinels and reconstructed in the decoder,
+    and prefix-LM (S-denoiser) where the decoder continues a prefix.
+    """
+
+    def __init__(self, blocks, tok: Tokenizer, cfg, seed: int = 0):
+        self.blocks = blocks
+        self.tok = tok
+        self.cfg = cfg
+        self.seed = seed
+
+    def __len__(self):
+        return len(self.blocks)
+
+    def __getitem__(self, idx):
+        rng = random.Random(self.seed * 1_000_003 + idx)
+        ids = list(self.blocks[idx])
+        tok = self.tok
+
+        if rng.random() < self.cfg.prefix_lm_frac and len(ids) > 3:
+            cut = rng.randint(1, len(ids) - 1)
+            src_ids, tgt_ids = ids[:cut], ids[cut:]
+        else:
+            mask = _random_spans_mask(len(ids), self.cfg.denoise_rate,
+                                      self.cfg.denoise_mean_span, rng)
+            src_ids, tgt_ids, si, prev = [], [], 0, False
+            for t, m in zip(ids, mask):
+                if m:
+                    if not prev and si < self.cfg.num_sentinels:
+                        sent = tok.sentinel_id(si)
+                        src_ids.append(sent)
+                        tgt_ids.append(sent)
+                        si += 1
+                    tgt_ids.append(t)
+                else:
+                    src_ids.append(t)
+                prev = m
+            if si < self.cfg.num_sentinels:
+                tgt_ids.append(tok.sentinel_id(si))  # final sentinel
+
+        tgt_ids = tgt_ids[: self.cfg.max_seq_len - 1]
+        return {
+            "src": torch.tensor(src_ids[: self.cfg.max_seq_len], dtype=torch.long),
+            "tgt_in": torch.tensor([tok.bos_id] + tgt_ids, dtype=torch.long),
+            "labels": torch.tensor(tgt_ids + [tok.eos_id], dtype=torch.long),
+        }
+
+
 class Seq2SeqDataset(Dataset):
     """Tokenizes (src, tgt) pairs into encoder/decoder tensors."""
 

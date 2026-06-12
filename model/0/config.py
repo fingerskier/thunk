@@ -56,23 +56,39 @@ class ThunkConfig:
     # ---- tokenizer ----
     tokenizer_path: str = "tokenizer.model"
     control_tags: List[str] = field(default_factory=lambda: list(CONTROL_TAGS))
+    num_sentinels: int = 64          # <extra_id_i> tokens for denoising (SPEC 6.1)
 
-    # ---- training ----
-    batch_size: int = 64
-    lr: float = 5e-4
+    # ---- optimizer (SPEC 6.4) ----
+    optimizer: str = "muon"          # "muon" (Muon 2D + AdamW) or "adamw" fallback
+    lr: float = 5e-4                 # AdamW LR (embeddings, norms, head)
+    muon_lr: float = 2e-2            # Muon LR (hidden 2D weight matrices)
     min_lr_ratio: float = 0.1        # WSD-style cooldown floor
     weight_decay: float = 0.1
+    grad_clip: float = 1.0
+
+    # ---- phase 1: denoising pretrain (SPEC 6.1) ----
+    denoise_steps: int = 1500
+    denoise_block: int = 96          # packed monolingual block length
+    denoise_rate: float = 0.15       # fraction of tokens corrupted (R-denoiser)
+    denoise_mean_span: int = 3       # mean corrupted span length
+    prefix_lm_frac: float = 0.25     # fraction of examples using prefix-LM (S-denoiser)
+
+    # ---- phase 2: supervised seq2seq (SPEC 6.1) ----
+    batch_size: int = 64
     warmup_steps: int = 200
     max_steps: int = 4000
     decay_frac: float = 0.2          # final fraction of steps spent decaying LR
     label_smoothing: float = 0.1
-    grad_clip: float = 1.0
     eval_interval: int = 250
     save_interval: int = 1000
     seed: int = 1337
 
     # ---- data ----
     data_dir: str = "data_cache"
+
+    def sentinels(self) -> List[str]:
+        """Sentinel tokens reserved for denoising span corruption."""
+        return [f"<extra_id_{i}>" for i in range(self.num_sentinels)]
 
     def __post_init__(self):
         assert self.d_model == self.n_heads * self.head_dim, (

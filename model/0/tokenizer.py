@@ -63,3 +63,7 @@ class Tokenizer:
 
     def piece(self, idx: int) -> str:
         return self.sp.id_to_piece(idx)
+
+    def sentinel_id(self, i: int) -> int:
+        """Token id of the i-th denoising sentinel ``<extra_id_i>``."""
+        return self.sp.piece_to_id(f"<extra_id_{i}>")
