@@ -1,0 +1,96 @@
+name: Train model & release weights
+
+# Manually triggered: training a full run on every push would burn runner
+# minutes. Kick it off from the Actions tab (or `gh workflow run`).
+on:
+  workflow_dispatch:
+    inputs:
+      steps:
+        description: "Training steps (empty = full run from config, 4000)"
+        required: false
+        default: ""
+      max_number:
+        description: "Largest number in the generated corpus"
+        required: false
+        default: "4999"
+      tag:
+        description: "Release tag (empty = model0-run-<run number>)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    defaults:
+      run:
+        working-directory: model/0
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: model/0/requirements.txt
+
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          python -m pip install --upgrade pip
+          # CPU wheels: ~10x smaller than the default CUDA build, and the
+          # runner has no GPU anyway.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: Train
+        run: |
+          ARGS="--max-number ${{ inputs.max_number }}"
+          if [ -n "${{ inputs.steps }}" ]; then
+            ARGS="$ARGS --steps ${{ inputs.steps }}"
+          fi
+          python train.py $ARGS 2>&1 | tee train.log
+
+      - name: Package weights
+        run: |
+          mkdir -p release
+          cp checkpoints/final.pt tokenizer.model train.log release/
+          # best.pt only exists if at least one eval ran (steps >= eval_interval)
+          if [ -f checkpoints/best.pt ]; then cp checkpoints/best.pt release/; fi
+          cd release && sha256sum * > SHA256SUMS
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="model0-run-${{ github.run_number }}"
+          fi
+          {
+            echo "Thunk v0 baseline translator weights, trained on CI."
+            echo
+            echo "- Commit: ${{ github.sha }}"
+            echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "## Usage"
+            echo
+            echo '```bash'
+            echo "cd model/0 && pip install -r requirements.txt"
+            echo "mkdir -p checkpoints && mv best.pt final.pt checkpoints/"
+            echo 'python translate.py --src digits --tgt english "3247"'
+            echo '```'
+            echo
+            echo "## Training log (tail)"
+            echo
+            echo '```'
+            tail -n 25 train.log
+            echo '```'
+          } > notes.md
+          gh release create "$TAG" \
+            --title "Thunk model0 weights ($TAG)" \
+            --notes-file notes.md \
+            --target "${{ github.sha }}" \
+            release/*
