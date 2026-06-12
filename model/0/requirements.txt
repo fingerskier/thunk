@@ -1,4 +1,2 @@
-torch>=2.0
-sentencepiece
-datasets
-tqdm
+torch>=2.2
+sentencepiece>=0.2
