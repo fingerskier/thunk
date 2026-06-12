@@ -6,10 +6,10 @@ preserving translation task across several SPEC.md Section 4 directions, which i
 exactly what the v0 milestone calls for (English <-> code/script and English ->
 English style transfer):
 
-  * <src:digits> <-> <tgt:english>   number spelling (compositional, the bulk)
-  * <src:english> <-> <tgt:upper>    case / style transfer
-  * <src:python> <-> <tgt:english>   tiny code <-> description
-  * <src:bash>   <-> <tgt:powershell> shell command porting
+  * <src:digits>  <-> <tgt:english>     number spelling (compositional, the bulk)
+  * <src:english> <-> <tgt:english>     comparison paraphrase (semantic rewrite)
+  * <src:python>  <-> <tgt:english>     tiny code <-> description
+  * <src:bash>    <-> <tgt:powershell>  shell command porting
 
 Every pair is exact-match verifiable, so training progress can be measured by
 decoding accuracy, not just loss.
@@ -61,55 +61,17 @@ def _number_pairs(max_n: int) -> List[Pair]:
     return pairs
 
 
-_SENTENCES = [
-    "preserve meaning while changing surface form",
-    "translate the source into the target language",
-    "rename the jpeg files to jpg",
-    "list every file in the current directory",
-    "the encoder reads the complete source segment",
-    "a tiny composable cognitive prosthetic",
-    "deep encoder shallow decoder transformer",
-    "meaning must survive the translation",
-    "copy the report to the backup folder",
-    "remove the temporary build artifacts",
-    "the quick brown fox jumps over the lazy dog",
-    "attention is all you need",
-    "tie one shared embedding for input and output",
-    "decode target tokens autoregressively",
-    "exact preservation of identifiers unless instructed",
-    "normalize the input before tokenizing it",
-    "prepend the source and target language tags",
-    "encode up to two thousand source tokens",
-    "the decoder generates the target sequence",
-    "mean pool the final encoder states",
-    "beam search width four for deterministic translation",
-    "the target language tag is mandatory",
-    "store embeddings with source and target text",
-    "chunk long documents by semantic boundaries",
-    "every production grade small stack is encoder decoder",
-    "grouped query attention cuts the cache four times",
-    "rotary embeddings on self attention only",
-    "no biases on any linear projection",
-    "the curated corpus is the quality anchor",
-    "small clean data beats large noisy data",
-    "round trip should preserve the meaning",
-    "the model is a translator not a chat agent",
-    "split digits and preserve code indentation",
-    "warmup stable decay schedule for stability",
-    "measure fertility per language before freezing",
-    "the river flows quietly past the old mill",
-    "she packed five boxes of glazed apples",
-    "bright lanterns floated over the calm harbor",
-    "the cat slept on a warm wooden shelf",
-    "gather the seeds before the first frost",
-]
-
-
-def _case_pairs() -> List[Pair]:
+def _paraphrase_pairs(max_n: int = 50) -> List[Pair]:
+    """English -> English semantic rewrite (SPEC.md Section 1): a comparison and
+    its logically equivalent inverse. Deterministic, meaning-preserving, and
+    fully lowercase so it tokenizes cleanly (unlike case transfer)."""
     pairs = []
-    for s in _SENTENCES:
-        pairs.append((_tag("english", "upper", s), s.upper()))
-        pairs.append((_tag("upper", "english", s.upper()), s))
+    for a in range(max_n + 1):
+        for b in range(a):  # b < a, so the comparison direction is unambiguous
+            gt = f"{a} is greater than {b}"
+            lt = f"{b} is less than {a}"
+            pairs.append((_tag("english", "english", gt), lt))
+            pairs.append((_tag("english", "english", lt), gt))
     return pairs
 
 
@@ -192,7 +154,7 @@ def build_corpus(max_number: int = 4999, seed: int = 1337, floor: int = 2200
 
     groups = [
         _number_pairs(max_number),
-        _case_pairs(),
+        _paraphrase_pairs(),
         _python_pairs(),
         _shell_pairs(),
     ]

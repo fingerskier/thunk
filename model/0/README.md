@@ -55,7 +55,7 @@ meaning-preserving, exact-match-verifiable translation task across four SPEC §4
 directions, both ways:
 
 - `<src:digits>` ↔ `<tgt:english>` — number spelling (compositional, the bulk)
-- `<src:english>` ↔ `<tgt:upper>` — case / style transfer
+- `<src:english>` ↔ `<tgt:english>` — comparison paraphrase (semantic rewrite)
 - `<src:python>` ↔ `<tgt:english>` — tiny code ↔ description
 - `<src:bash>` ↔ `<tgt:powershell>` — shell command porting
 
