@@ -77,6 +77,31 @@ _SENTENCES = [
     "tie one shared embedding for input and output",
     "decode target tokens autoregressively",
     "exact preservation of identifiers unless instructed",
+    "normalize the input before tokenizing it",
+    "prepend the source and target language tags",
+    "encode up to two thousand source tokens",
+    "the decoder generates the target sequence",
+    "mean pool the final encoder states",
+    "beam search width four for deterministic translation",
+    "the target language tag is mandatory",
+    "store embeddings with source and target text",
+    "chunk long documents by semantic boundaries",
+    "every production grade small stack is encoder decoder",
+    "grouped query attention cuts the cache four times",
+    "rotary embeddings on self attention only",
+    "no biases on any linear projection",
+    "the curated corpus is the quality anchor",
+    "small clean data beats large noisy data",
+    "round trip should preserve the meaning",
+    "the model is a translator not a chat agent",
+    "split digits and preserve code indentation",
+    "warmup stable decay schedule for stability",
+    "measure fertility per language before freezing",
+    "the river flows quietly past the old mill",
+    "she packed five boxes of glazed apples",
+    "bright lanterns floated over the calm harbor",
+    "the cat slept on a warm wooden shelf",
+    "gather the seeds before the first frost",
 ]
 
 
@@ -109,7 +134,10 @@ def _python_pairs() -> List[Pair]:
 
 
 _FILES = ["report.txt", "data.csv", "build", "logs", "main.py", "notes.md",
-          "image.png", "archive.zip", "config.json", "tmp"]
+          "image.png", "archive.zip", "config.json", "tmp",
+          "index.html", "server.js", "styles.css", "readme.md", "test.py",
+          "backup.tar", "results.json", "draft.txt", "schema.sql", "app.log",
+          "model.bin", "video.mp4", "cache", "secrets.env", "output.csv"]
 
 
 def _shell_pairs() -> List[Pair]:
@@ -129,19 +157,55 @@ def _shell_pairs() -> List[Pair]:
     return pairs
 
 
-def build_corpus(max_number: int = 4999, seed: int = 1337
-                 ) -> Tuple[List[Pair], List[Pair]]:
-    """Build the full parallel corpus and return (train, val) splits."""
-    pairs: List[Pair] = []
-    pairs += _number_pairs(max_number)
-    pairs += _case_pairs()
-    pairs += _python_pairs()
-    pairs += _shell_pairs()
+def _upsample(pairs: List[Pair], floor: int, rng: random.Random) -> List[Pair]:
+    """Repeat a direction group up to ``floor`` examples (temperature-style
+    upsampling of low-resource directions, SPEC.md Sections 5-6). Distinct pairs
+    are preserved; only duplicates are added to reach the floor."""
+    if len(pairs) >= floor:
+        return list(pairs)
+    out = list(pairs)
+    while len(out) < floor:
+        extra = list(pairs)
+        rng.shuffle(extra)
+        out += extra[: floor - len(out)]
+    return out
 
+
+def build_corpus(max_number: int = 4999, seed: int = 1337, floor: int = 2200
+                 ) -> Tuple[List[Pair], List[Pair]]:
+    """Build the full parallel corpus and return (train, val) splits.
+
+    The number-spelling direction naturally dominates, so the smaller directions
+    are upsampled to a per-group floor before the train/val split. This keeps the
+    held-out evaluation honest (val is split from distinct pairs) while giving
+    each direction enough gradient signal to actually learn.
+    """
     rng = random.Random(seed)
-    rng.shuffle(pairs)
-    n_val = max(200, len(pairs) // 50)
-    return pairs[n_val:], pairs[:n_val]
+
+    # split each group into distinct train/val before any upsampling, so val
+    # never contains a pair that was duplicated into train.
+    def split(pairs):
+        pairs = list(pairs)
+        rng.shuffle(pairs)
+        k = max(20, len(pairs) // 20)
+        return pairs[k:], pairs[:k]
+
+    groups = [
+        _number_pairs(max_number),
+        _case_pairs(),
+        _python_pairs(),
+        _shell_pairs(),
+    ]
+
+    train, val = [], []
+    for g in groups:
+        tr, va = split(g)
+        train += _upsample(tr, floor, rng)
+        val += va
+
+    rng.shuffle(train)
+    rng.shuffle(val)
+    return train, val
 
 
 def write_tokenizer_corpus(pairs: List[Pair], path: str):
