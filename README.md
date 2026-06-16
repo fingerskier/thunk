@@ -20,4 +20,12 @@ A tiny, composable cognitive prosthetic
 ## Architecture
 * Transformer with multi-headed attention
 * Internal recursion until the latent vector stabilizes (with stop-limit)
-* 
+
+## Repository layout
+Each model iteration lives in its own numbered subdirectory under `model/`,
+with its own spec, sources, and implementation:
+
+* [`model/0/`](model/0/) — the current model (**#0**, v0 baseline translator).
+  See [`model/0/README.md`](model/0/README.md) and
+  [`model/0/SPEC.md`](model/0/SPEC.md) for the design and
+  [`model/0/SOURCES.md`](model/0/SOURCES.md) for training material.
