@@ -1,7 +1,7 @@
 # Thunk v0 — Baseline Translator
 
 A runnable implementation of the v0 baseline translator from
-[`SPEC.md`](../../SPEC.md): a deep-encoder / shallow-decoder encoder-decoder
+[`SPEC.md`](SPEC.md): a deep-encoder / shallow-decoder encoder-decoder
 Transformer that preserves meaning while changing surface form, language, or
 formalism.
 
