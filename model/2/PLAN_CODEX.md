@@ -84,6 +84,104 @@ float residual bus
 
 Stay in discrete space for a few micro-ops only after pack/unpack is proven.
 
+## Connectivity model (int graph owns bit edges)
+
+Discrete topology is defined at the **integer / word** level, not as an
+arbitrary bit graph.
+
+### Rule
+
+1. Nodes in the discrete core are **ints** (typically one `uint32` activation
+   word, or an `int32` score lane associated with that word).
+2. An **int-edge** `U → V` means “integer unit U feeds integer unit V.”
+3. **Bitwise edges exist only along int-edges.**
+4. If `U → V` is present, the default bit coupling is **dense all-to-all**:
+   every bit of U may touch every bit of V (implemented as a 32×32 binary
+   block, i.e. one packed-word binary linear / XNOR-popcount from U into V’s
+   score).
+5. There is **no** bit edge between words that are not int-connected.
+
+```text
+Int graph (coarse):          Bit graph (induced):
+
+  U ──► V                      all 32 bits(U) ──dense──► all 32 bits(V)
+  U ──► W                      all 32 bits(U) ──dense──► all 32 bits(W)
+  X           (no edge)        bits(X) have no paths into V/W from X
+```
+
+### Why this is a good constraint
+
+- **Sparse where it matters:** connectivity/search is over a small int graph
+  (`d_model/32` nodes), not over thousands of bit nodes.
+- **Dense where hardware is cheap:** a fully connected 32×32 binary block is
+  exactly “one weight word per input bit lane into one output score,” i.e. the
+  natural packed kernel, not a gather of random bit wires.
+- **Matches int-wise first:** the learned object is “which ints talk,” then
+  “what 32-bit pattern implements that talk.”
+- **Keeps bitwise from exploding:** M4 bitwise ops are *refinements of an
+  existing int-edge* (masks, rotates before the dense block, residual XOR on
+  the same edge), not a second unrelated wiring language.
+- **Easy to test:** int-adjacency is an explicit matrix/list; forbidden bit
+  interactions are those outside the Kronecker-ish expansion of that adjacency.
+
+### Formal view
+
+Let int-activations be words `x_0..x_{m-1}` each in `{0,1}^32` packed as
+`uint32`. Let `A[j,i] ∈ {0,1}` be int-adjacency (`i → j`).
+
+Default dense-on-edge accumulation for output score lane `j`:
+
+```text
+s_j = sum_{i : A[j,i]=1}  popcount_xnor(W_{j,i}, x_i)
+# W_{j,i} is 32 packed uint32 words (32 out-bits × 32 in-bits), or the
+# arithmetic-twin ±1 matrix of shape (32, 32).
+```
+
+If several int sources feed `j`, their int contributions add in **int-wise**
+space. Bits from a non-neighbor never enter `s_j`.
+
+Optional later specializations of an existing edge (still no new bit endpoints):
+
+| Edge refinement | Meaning |
+|---|---|
+| Full 32×32 binary block | default dense bit coupling |
+| Shared mask + popcount | fewer parameters per edge |
+| Rotate/XOR then dense | bitwise preconditioner on the same edge |
+| Diagonal / bit-local | depthwise: bit k of U only to bit k of V |
+| Low-rank bit block | factor 32×32 as 32×r · r×32 in ±1 or int |
+
+Diagonal and low-rank are **restrictions** of the dense int-edge, not bypasses
+of the int graph.
+
+### What we explicitly avoid
+
+- Bit-level sparse graphs with arbitrary cross-word wires unrelated to int `A`
+- Per-bit neighbors that skip the int abstraction
+- Treating bitwise and int-wise as two independently wired networks
+
+Bitwise is not a second network. It is **implementation detail + optional
+shape** on top of the int graph.
+
+### Parameter counting (sanity)
+
+For `m = d_model/32` int nodes and dense int graph (`m²` edges):
+
+```text
+bits in weights ≈ m² * 32 * 32 = d_model²
+```
+
+That matches a full binary `d_model × d_model` linear — good. If the int graph
+is sparse (e.g. block-local, strided, or recurrent path graph), parameter count
+and compute drop by the edge factor `|E|/m²`, while each existing edge stays a
+cheap dense 32-bit kernel.
+
+First test models should use either:
+
+- **full int graph** (equivalent to ordinary binary linear), or
+- **simple structured int graph** (chain / residual local / few blocks)
+
+not a learned irregular bit mesh.
+
 ## Representation
 
 ### Packed storage
@@ -208,38 +306,46 @@ Exit (property tests):
 
 ### M3 — Int-wise little core
 
-First “subnet” that is more than one matvec:
+First subnet over the **int graph**. Default edge = dense 32×32 binary block
+(all bits of source int → score lanes of dest int). No bit wires outside
+int-adjacency (see Connectivity model).
 
 ```text
 # simple default (S_int)
-s = BinaryLinear(x_bits)              # int scores
-s = s + BinaryLinear(threshold(s))    # second int pass
-y = alpha * s + bias                  # float lift
+# A = int adjacency (full or structured)
+s = IntGraphBinaryLinear(x_words, A)   # sum dense blocks over edges
+s = s + IntGraphBinaryLinear(threshold(s), A)
+y = alpha * s + bias                   # float lift
 ```
 
-Or even simpler first cut: single BinaryLinear + int threshold + second
-BinaryLinear.
+Even simpler first cut: one full int graph layer (== ordinary binary linear when
+`A` is all-ones).
 
 Exit:
 
 - arithmetic and packed int-core agree
+- tests that zeroing `A[j,i]` removes all influence of word `i` on score `j`
 - residual float bus still present
 - overfit holds or is only mildly worse than M1
 - log score histograms and threshold saturation
 
-### M4 — Bitwise little core
+### M4 — Bitwise refinements on existing int-edges
 
-Add optional word-level ops on packed activations:
+Bitwise ops may only precondition or residual-update along edges already in the
+int graph. They must not introduce cross-talk between non-neighbors.
 
-- learned or fixed XOR masks
-- rotates within `uint32`
-- cheap bitwise residual: `x ^= P(f(x))`
+Examples on an edge `U → V`:
 
-Keep depth tiny (1–2 ops). This is exploratory, not required to beat M3.
+- XOR mask / rotate on `U` before the dense 32×32 block into `V`
+- bit-local (diagonal) restriction of that block
+- residual `U ^= f_edge(U→V)` only using that edge’s endpoints
+
+Keep depth tiny (1–2 ops). Exploratory; not required to beat M3.
 
 Exit:
 
 - each bitwise op has a tested arithmetic or bitexact reference
+- property test: no edge in `A` ⇒ no bit influence
 - can be toggled off
 - no obligation that M4 improves loss; measure cost and stability
 
