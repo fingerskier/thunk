@@ -10,6 +10,83 @@ Do **not** start complicated. Prove a normal network first. Add one idea at a
 time. Attention and auto-halt are **later** phases, not part of the first train
 loop.
 
+## Core thesis (the point of this model test)
+
+Run the network at **two coupled levels** on the same graph:
+
+| Level | Object | Forward | Backward |
+|---|---|---|---|
+| **Int-wise** | word nodes + int-edges | normal NN-style accumulate/transform on int scores / edge weights | normal grad through those int ops (plus STE where discrete) |
+| **Bit/boolean** | 32 bits inside each int, dense on each int-edge | boolean / XNOR-popcount / word logic realizing that edge | STE (or twin) grads into per-bit shadow weights and bit activations |
+
+So it is not “pack bits only at inference.” The experiment is whether we can
+**train and run both**:
+
+1. a coarse **int graph NN** (who connects to whom, how scores mix), and
+2. a fine **bit NN on each edge** (which boolean pattern implements that link),
+
+with gradients flowing at both grains.
+
+```text
+        int path (coarse NN)
+   s_i  ──────────────────────────►  s_j
+          │                         ▲
+          │ edge U→V                │ sum / lift
+          ▼                         │
+     bits(U) ── bit/boolean NN ──► contrib_V
+        bit path (dense on this int-edge only)
+```
+
+### What “forward/back on both” means in practice
+
+**Forward**
+
+- Int level: `s_j = Σ_{i∈N(j)} f_int(s_i, e_ji)` (add scores, scales, thresholds).
+- Bit level (per existing int-edge `i→j`):  
+  `contrib_ji = popcount_xnor(W_ji, bits(x_i))` or a small boolean block on those 32×32 links,  
+  then fold into `s_j`.
+
+**Backward**
+
+- Int level: ∂L/∂s and ∂L/∂(int edge params) as in a normal small NN.
+- Bit level: ∂L/∂contrib flows into the edge’s bit weights via STE on `sign(θ_ji)`  
+  (arithmetic ±1 twin in train; packed uint32 in infer).
+- If activations are also binarized, STE into pre-bit continuous values or into  
+  shadow bit logits — still scoped to int-neighbors only.
+
+The two levels share topology: **bit paths are not a second arbitrary net**; they
+are the interior of each int-edge. The int net is not merely bookkeeping; it is
+the coarse activation space where residual/score dynamics live.
+
+### Why bother (hypothesis)
+
+- Coarse int dynamics stay closer to “normal NN” trainability.
+- Fine bit blocks buy packing, cheap ops, and high fan-in per word.
+- Coupling them tests whether dual-grain training beats  
+  (a) float-only, (b) flat binary linear, (c) pack-at-infer-only.
+
+### What would falsify the thesis
+
+- Bit-level STE never moves edge patterns while int path fits alone  
+  → bits are dead weight; flatten to int/float features.
+- Int path adds nothing over one flat binary matmul  
+  → drop hierarchical graph; keep packed binary linear only.
+- Dual path trains but never matches arithmetic twin / packed twin  
+  → implementation bug, not a modeling win.
+
+### Milestone mapping
+
+| Milestone | Dual-level status |
+|---|---|
+| M0 | float only (control scaffold) |
+| M1 | bit weights inside ordinary linear (flat bit path; one big int) |
+| M2 | packed realization of bit path |
+| M3 | **explicit int graph + bit block per edge** (thesis online) |
+| M4 | richer boolean interior on those same edges |
+| M5+ | recurrence / attention / halt around the dual core |
+
+M0–M2 still matter so M3 is a measured delta, not a pile of first bugs.
+
 ## Build order (deliberately simple)
 
 ```text
