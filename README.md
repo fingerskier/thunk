@@ -32,7 +32,8 @@ with its own spec, sources, and implementation:
 * [`model/1/`](model/1/) — **#1**, the small recursive reasoning diffuser.
   See [`model/1/PLAN.md`](model/1/PLAN.md) for the phased plan.
 * [`model/2/`](model/2/) — **#2**, the auto-halting recurrent LM with ternary
-  weights (planned). See [`model/2/PLAN.md`](model/2/PLAN.md) for the review,
+  weights. See [`model/2/README.md`](model/2/README.md) for the training &
+  inference runbook and [`model/2/PLAN.md`](model/2/PLAN.md) for the review,
   evaluation, and phased plan.
 
 Distributed-training strategy (Psyche/Solana evaluation, alternatives, and
