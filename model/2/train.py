@@ -81,9 +81,11 @@ def compute_loss(cfg: RecurrentLMConfig, logits, targets):
 @torch.no_grad()
 def evaluate(model: RecurrentLM, dataset: LMDataset, cfg: RecurrentLMConfig,
              device: str, r_values=None):
-    """Validation loss at fixed test-time loop counts. The Phase 0 gate reads
-    off this table: loss must improve monotonically with r (to ~2x the
-    training mean) or recursion is buying nothing."""
+    """Validation loss at fixed test-time loop counts, measured with the
+    configured training objective (stablemax by default) so the number is
+    comparable to what training optimizes. The Phase 0 gate reads off this
+    table: loss must improve monotonically with r (to ~2x the training mean)
+    or recursion is buying nothing."""
     model.eval()
     r_values = r_values or sorted({1, 2, max(1, round(cfg.mean_loops)),
                                    cfg.max_loops, 2 * cfg.max_loops})
@@ -94,8 +96,7 @@ def evaluate(model: RecurrentLM, dataset: LMDataset, cfg: RecurrentLMConfig,
         total = 0.0
         for x, y in batches:
             logits, _ = model(x, loops=r)
-            total += F.cross_entropy(logits.view(-1, logits.size(-1)),
-                                     y.reshape(-1)).item()
+            total += compute_loss(cfg, logits, y).item()
         losses[r] = total / len(batches)
     model.train()
     return losses

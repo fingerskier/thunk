@@ -302,9 +302,10 @@ class RecurrentLM(nn.Module):
         approximation). Prelude and coda keep ordinary one-entry caches; the
         coda cache is committed from the final probe only.
 
-        Returns (ids, depths): the extended ids and a list with the loop
-        count spent on each generated token — the halt-depth metadata that
-        downstream chain links read as a confidence signal.
+        Returns (ids, depths): the extended ids and a list with, for each
+        generated token, the loop count that produced the distribution it was
+        sampled from — the halt-depth metadata that downstream chain links
+        read as a confidence signal.
         """
         cfg = self.cfg
         kl_threshold = cfg.kl_threshold if kl_threshold is None else kl_threshold
@@ -398,16 +399,14 @@ class RecurrentLM(nn.Module):
             depths = torch.cat([depths, torch.tensor([depth], device=device)])
             return final_logits, depth
 
-        # Prefill the prompt (its depths also come from the halting rule).
-        logits = None
+        # Prefill the prompt; the last position's depth is the compute that
+        # produced the first sampled token's distribution.
+        logits, last_depth = None, None
         for pos in range(T0):
-            logits, _ = run_position(pos, ids[:, pos:pos + 1])
+            logits, last_depth = run_position(pos, ids[:, pos:pos + 1])
 
         new_depths = []
-        for _ in range(max_new_tokens):
-            pos = ids.size(1) - 1
-            if pos + 1 >= cfg.max_seq_len:
-                break
+        for step in range(max_new_tokens):
             step_logits = logits[:, -1, :] if logits.dim() == 3 else logits
             if temperature > 0.0:
                 step_logits = step_logits / temperature
@@ -420,8 +419,12 @@ class RecurrentLM(nn.Module):
             else:
                 nxt = step_logits.argmax(dim=-1, keepdim=True)
             ids = torch.cat([ids, nxt], dim=1)
-            logits, depth = run_position(ids.size(1) - 1, nxt)
-            new_depths.append(depth)
+            new_depths.append(last_depth)
             if eos_id is not None and (nxt == eos_id).all():
                 break
+            # Only run the new token if another one will be sampled after it
+            # (its own run would produce a distribution nobody consumes).
+            if step == max_new_tokens - 1 or ids.size(1) >= cfg.max_seq_len:
+                break
+            logits, last_depth = run_position(ids.size(1) - 1, nxt)
         return ids, new_depths

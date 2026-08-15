@@ -120,9 +120,13 @@ class LMDataset:
                 f"Corpus too small: {len(ids)} tokens for seq_len={seq_len}."
             )
         stream = torch.tensor(ids, dtype=torch.long)
-        split = max(seq_len + 1, int(len(stream) * (1 - val_fraction)))
+        # Both splits must hold at least one full window, and validation must
+        # never alias the training stream — shrink the train side instead.
+        window = seq_len + 1
+        split = min(int(len(stream) * (1 - val_fraction)), len(stream) - window)
+        split = max(split, window)
         self.train_stream = stream[:split]
-        self.val_stream = stream[split:] if len(stream) - split > seq_len else stream[:split]
+        self.val_stream = stream[split:]
         self.generator = torch.Generator().manual_seed(seed)
 
     def get_batch(self, batch_size: int, split: str = "train",
