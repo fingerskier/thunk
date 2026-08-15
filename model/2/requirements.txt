@@ -1,0 +1,5 @@
+# CPU-only torch is fine for the smoke config; use a CUDA build for real runs.
+torch>=2.1
+# Only needed when training/generating with the pinned shared tokenizer
+# (model/0's tokenizer.model); the byte-level smoke fallback has no deps.
+sentencepiece>=0.1.99
