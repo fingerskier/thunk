@@ -66,10 +66,16 @@ rather than a puzzle solver or canvas diffuser.
 **Composability requirements** (so #2 can serve as a chain link per the serial
 composition architecture — Perceiver → Reasoner → Actor):
 
-- **Share model #0's tokenizer** (the SentencePiece BPE with reserved control
-  tags), not a private tiny vocab like model #1's 128-token config. Chained
-  models must speak the same token space; text is the inter-model interface
-  until a shared embedding space is proven.
+- **Share a frozen, versioned tokenizer artifact with model #0**, not a
+  private tiny vocab like model #1's 128-token config. Chained models must
+  speak the same token space; text is the inter-model interface until a
+  shared embedding space is proven. This requires fixing a latent hazard
+  first: `model/0/train.py` trains a fresh `tokenizer.model` whenever the
+  file is absent, and every CI release packages that run-specific artifact —
+  so "model #0's tokenizer" is not currently a stable referent. Before
+  model #2 trains, publish a pinned tokenizer artifact (checked in or
+  released with a version tag) that both models load; any regeneration is a
+  breaking change that retrains both models together.
 - **Expose the halt depth** per token/sequence as metadata. Downstream links
   (and the eventual router/chain controller) can use "how long it thought" as
   a confidence signal.
@@ -140,9 +146,15 @@ Two failure modes to design against from day one:
 Model #2 inherits model #1's core machinery, so these must land properly here
 (and ideally be fixed in model/1 too):
 
-1. `StableMaxCrossEntropy` is defined in `model/1/model.py` but never used —
-   `train.py` uses plain `F.cross_entropy`. The TRM recipe calls stablemax a
-   non-optional stabilizer on small data.
+1. `StableMaxCrossEntropy` in `model/1/model.py` is both unused **and not
+   StableMax**: it clamps logits and then applies ordinary
+   exponential-softmax cross entropy, whereas real stablemax (Prieto et al.,
+   [arXiv:2501.04697](https://arxiv.org/abs/2501.04697)) replaces `exp` with
+   the non-exponential `s(x) = x+1` for `x ≥ 0`, `1/(1−x)` for `x < 0`
+   before normalizing. Merely wiring the existing class into the loss would
+   not deliver the stabilizer the TRM recipe calls non-optional on small
+   data — model #2 must implement the actual transform (and model/1 should
+   replace its class).
 2. The halt head is trained (0.05-weighted BCE) but **never consulted** — no
    early exit in training, and no inference path exists at all. "Auto-halting"
    is currently unexercised code.
@@ -233,9 +245,9 @@ Everything below is a starting point to be ablated, not a commitment.
 | Norms | RMSNorm pre-norm + QK-norm; extra RMSNorm before each quantized linear in ternary phase | model #0 + b1.58 conversion evidence |
 | Loop count (train) | r ~ log-normal Poisson, mean 4, max 8; truncated BPTT k=4 | Huginn; Ouro's R=8 instability warning |
 | Halting (infer) | per-token KL threshold ~5e-4 between successive loop outputs; mod-k KV cache, k=4 | Huginn defaults |
-| Tokenizer | model #0's SentencePiece BPE (8k now, grows with #0) | composability |
-| Params | ~10M FP-equivalent (≈2M embedding + ≈8M body) | trains on one consumer GPU / CI |
-| Ternary body size at export | ~2–3 MB packed (+int8 embeddings ~2 MB) | the whole point |
+| Tokenizer | pinned, versioned artifact shared with model #0 (8k vocab today) | composability — see requirement above |
+| Params | FP-256 baseline: ~8.5M (≈2M tied embedding + ≈6.5M body). Ternary-512 variant: ~23M (≈4.1M tied embedding + ≈19M body, ReLU² FFN) | trains on one consumer GPU / CI |
+| Export size (ternary-512) | ≈4.7 MB packed ternary body (4 weights/byte + scales) + ≈4.1 MB int8 tied embedding/head ≈ **9 MB** | honest math; holds only with the tied head kept int8 — an untied FP16 head alone adds ~8 MB |
 
 Deep supervision (model #1 style) vs plain next-token training with randomized
 loops: start with the latter — it is the proven recipe for *language models*
@@ -284,8 +296,11 @@ in its graph); measure bytes, tok/s, and energy on a laptop-class CPU.
 Expose `embed()`-style latent access and halt-depth metadata; demonstrate one
 two-link chain (model #0 translate → model #2 reason) over the shared
 tokenizer.
-**Exit gate:** a single-digit-MB artifact that runs faster than FP on CPU and
-composes with model #0.
+**Exit gate:** a ~9 MB artifact (packed ternary body + int8 tied
+embedding/head — the budget above collapses if the head is untied or kept at
+FP16) that runs faster than FP on CPU and composes with model #0. If the
+target must be smaller, the levers are vocabulary (dominates at this scale),
+core width, or accepting the FP-256 ternary ablation's quality.
 
 ---
 
