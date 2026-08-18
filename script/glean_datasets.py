@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Glean small, model-shaped datasets from public training-data repositories.
+"""Glean small, model-shaped datasets from public repositories and APIs.
 
 Downloaded/generated artifacts are written under ./data/ (gitignored). The script is
 model-aware: pass --model 0 for seq2seq translation pairs or --model 1 for
 question/answer diffusion records. By default it samples lightweight slices from
-well-known Hugging Face dataset repositories when the optional ``datasets``
-package is installed, and falls back to deterministic synthetic examples when a
-source cannot be fetched.
+well-known Hugging Face dataset repositories, direct public files, and no-key
+public APIs, then falls back to deterministic synthetic examples when a source
+cannot be fetched.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import html
 import json
 import random
 import re
@@ -23,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence
 from urllib.error import URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +32,7 @@ DATA_DIR = ROOT / "data"
 
 Json = dict[str, Any]
 ShapeFn = Callable[[Json], Json | None]
+ApiFetchFn = Callable[[int, int], Iterable[Json]]
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,7 @@ class Source:
     hf_config: str | None
     hf_split: str
     url: str | None
+    api_fetcher: ApiFetchFn | None
     model_shapes: dict[str, ShapeFn]
 
 
@@ -98,6 +102,14 @@ def shape_text_completion(row: Json) -> Json | None:
     return {"question": f"continue this text: {question}", "answer": answer, "task": "completion"}
 
 
+def shape_api_qa_pair(row: Json) -> Json | None:
+    question = clean_text(row.get("question") or row.get("prompt"), 256)
+    answer = clean_text(row.get("answer") or row.get("response"), 128)
+    if not question or not answer:
+        return None
+    return {"source": tagged("question", "answer", question), "target": answer, "task": row.get("task", "api_qa")}
+
+
 def synthetic_rows(name: str) -> Iterator[Json]:
     """Deterministic fallback rows for offline smoke runs."""
 
@@ -112,6 +124,97 @@ def synthetic_rows(name: str) -> Iterator[Json]:
             "docstring": f"Return x plus {idx}.",
             "text": (f"This is fallback text example {idx} from {name}. " * 16),
         }
+
+
+def fetch_json(url: str) -> Any:
+    request = Request(url, headers={"User-Agent": "thunk-dataset-gleaner/1.0"})
+    with urlopen(request, timeout=30) as response:  # noqa: S310 - fixed public sources below
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+
+def iter_open_trivia_rows(limit: int, seed: int) -> Iterator[Json]:
+    """Fetch trivia question/answer rows from the Open Trivia DB API."""
+
+    remaining = max(0, limit)
+    while remaining > 0:
+        amount = min(remaining, 50)
+        payload = fetch_json(f"https://opentdb.com/api.php?{urlencode({'amount': amount, 'type': 'multiple'})}")
+        if payload.get("response_code") != 0:
+            return
+        for item in payload.get("results", []):
+            question = clean_text(html.unescape(item.get("question", "")), 256)
+            answer = clean_text(html.unescape(item.get("correct_answer", "")), 128)
+            if question and answer:
+                yield {
+                    "question": question,
+                    "answer": answer,
+                    "task": "trivia_qa",
+                    "api": "opentdb",
+                    "category": clean_text(html.unescape(item.get("category", "")), 128),
+                }
+                remaining -= 1
+                if remaining <= 0:
+                    return
+
+
+def iter_openlibrary_rows(limit: int, seed: int) -> Iterator[Json]:
+    """Fetch book metadata rows from the Open Library Search API."""
+
+    topics = ["science fiction", "mathematics", "programming", "history", "philosophy"]
+    rng = random.Random(seed)
+    rng.shuffle(topics)
+    yielded = 0
+    per_topic = max(1, min(50, limit))
+    for topic in topics:
+        params = {
+            "q": topic,
+            "fields": "title,author_name,first_publish_year",
+            "limit": per_topic,
+        }
+        payload = fetch_json(f"https://openlibrary.org/search.json?{urlencode(params)}")
+        for item in payload.get("docs", []):
+            title = clean_text(item.get("title"), 160)
+            authors = item.get("author_name") or []
+            author = clean_text(authors[0] if authors else "", 128)
+            if title and author:
+                yield {
+                    "question": f"Who wrote {title}?",
+                    "answer": author,
+                    "task": "book_author_qa",
+                    "api": "openlibrary",
+                    "topic": topic,
+                    "first_publish_year": item.get("first_publish_year"),
+                }
+                yielded += 1
+                if yielded >= limit:
+                    return
+
+
+def iter_datamuse_rows(limit: int, seed: int) -> Iterator[Json]:
+    """Fetch word-association rows from the Datamuse words API."""
+
+    topics = ["ocean", "music", "machine learning", "reasoning", "language", "number"]
+    rng = random.Random(seed)
+    rng.shuffle(topics)
+    yielded = 0
+    per_topic = max(1, min(50, limit))
+    for topic in topics:
+        params = {"ml": topic, "max": per_topic}
+        payload = fetch_json(f"https://api.datamuse.com/words?{urlencode(params)}")
+        for rank, item in enumerate(payload, start=1):
+            word = clean_text(item.get("word"), 80)
+            if word:
+                yield {
+                    "question": f"What is related word #{rank} for {topic}?",
+                    "answer": word,
+                    "task": "word_association",
+                    "api": "datamuse",
+                    "topic": topic,
+                    "score": item.get("score"),
+                }
+                yielded += 1
+                if yielded >= limit:
+                    return
 
 
 def iter_hf_rows(source: Source, limit: int, seed: int) -> Iterator[Json]:
@@ -152,6 +255,7 @@ SOURCES: tuple[Source, ...] = (
         hf_config="de-en",
         hf_split="train",
         url=None,
+        api_fetcher=None,
         model_shapes={"0": shape_translation_pair, "1": shape_qa},
     ),
     Source(
@@ -160,6 +264,7 @@ SOURCES: tuple[Source, ...] = (
         hf_config=None,
         hf_split="train",
         url="https://huggingface.co/datasets/databricks/databricks-dolly-15k/resolve/main/databricks-dolly-15k.jsonl",
+        api_fetcher=None,
         model_shapes={"0": shape_instruction_pair, "1": shape_qa},
     ),
     Source(
@@ -168,6 +273,7 @@ SOURCES: tuple[Source, ...] = (
         hf_config="python",
         hf_split="train",
         url=None,
+        api_fetcher=None,
         model_shapes={"0": shape_code_pair, "1": shape_qa},
     ),
     Source(
@@ -176,7 +282,35 @@ SOURCES: tuple[Source, ...] = (
         hf_config=None,
         hf_split="train",
         url=None,
+        api_fetcher=None,
         model_shapes={"0": shape_instruction_pair, "1": shape_text_completion},
+    ),
+    Source(
+        name="opentdb_trivia",
+        hf_repo=None,
+        hf_config=None,
+        hf_split="",
+        url=None,
+        api_fetcher=iter_open_trivia_rows,
+        model_shapes={"0": shape_api_qa_pair, "1": shape_qa},
+    ),
+    Source(
+        name="openlibrary_books",
+        hf_repo=None,
+        hf_config=None,
+        hf_split="",
+        url=None,
+        api_fetcher=iter_openlibrary_rows,
+        model_shapes={"0": shape_api_qa_pair, "1": shape_qa},
+    ),
+    Source(
+        name="datamuse_words",
+        hf_repo=None,
+        hf_config=None,
+        hf_split="",
+        url=None,
+        api_fetcher=iter_datamuse_rows,
+        model_shapes={"0": shape_api_qa_pair, "1": shape_qa},
     ),
 )
 
@@ -193,6 +327,8 @@ def collect_source(source: Source, model: str, limit: int, seed: int, offline: b
             yield iter_hf_rows(source, limit * 3, seed)
         if source.url:
             yield iter_url_rows(source, limit * 3)
+        if source.api_fetcher:
+            yield source.api_fetcher(limit * 3, seed)
         yield synthetic_rows(source.name)
 
     for rows in providers():
@@ -246,6 +382,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             Examples:
               python script/glean_datasets.py --model 0 --limit 200
               python script/glean_datasets.py --model 1 --sources databricks_dolly_15k openwebtext
+              python script/glean_datasets.py --model 1 --sources opentdb_trivia openlibrary_books datamuse_words --limit 20
               python script/glean_datasets.py --model all --offline --limit 20
             """
         ),

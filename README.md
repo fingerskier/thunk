@@ -31,7 +31,8 @@ with its own spec, sources, and implementation:
   [`model/0/SOURCES.md`](model/0/SOURCES.md) for training material.
 
 ## Dataset gleaning
-Use `script/glean_datasets.py` to sample public training-data repositories into
+Use `script/glean_datasets.py` to sample public training-data repositories and
+no-key public APIs into
 `./data/`, which is ignored by git. The script is model-aware: `--model 0`
 emits seq2seq records (`source`/`target` plus `train_text.txt` for the v0
 Tokenizer workflow), while `--model 1` emits reasoning-diffuser records
@@ -39,9 +40,11 @@ Tokenizer workflow), while `--model 1` emits reasoning-diffuser records
 
 ```bash
 python script/glean_datasets.py --model all --limit 250
+python script/glean_datasets.py --model 1 --sources opentdb_trivia openlibrary_books datamuse_words --limit 20
 ```
 
 The script prefers Hugging Face datasets when the optional `datasets` package is
-installed, can fall back to direct public JSONL URLs where available, and also
-supports `--offline` for deterministic smoke data without network access.
+installed, can fall back to direct public JSONL URLs where available, can fetch
+small samples from Open Trivia DB, Open Library, and Datamuse public APIs, and
+also supports `--offline` for deterministic smoke data without network access.
 
