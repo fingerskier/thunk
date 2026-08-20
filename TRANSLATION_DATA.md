@@ -43,12 +43,20 @@ formal LEAN statement, same program in two languages).
   `data/model/2/train_text.txt`: `{tagged source} <sep> {target}`.
 - **Weak-alignment sources** (The Stack comment pairing) are kept in separate
   per-source `.jsonl` files so they can be excluded via `--sources`.
+- **Tokenizer**: every tag above (`<src:X>`, `<tgt:X>`, `<sep>`) is a reserved
+  single symbol in the pinned shared tokenizer `tokenizer/v1/tokenizer.model`
+  (built by `script/train_tokenizer.py`; see `tokenizer/v1/MANIFEST.json`).
+  Adding a language here means adding its tag to `MODEL2_LANGS` in that
+  script and publishing a new tokenizer version.
 - Regenerate with:
 
 ```bash
 python script/glean_datasets.py --model 2 --limit 250
 # offline smoke:
 python script/glean_datasets.py --model 2 --offline --limit 5
+# pinned tokenizer (once per version; never overwrite in place):
+python script/train_tokenizer.py --out tokenizer/v2/tokenizer.model
+python script/test_train_tokenizer.py
 ```
 
 ## Candidates not yet wired

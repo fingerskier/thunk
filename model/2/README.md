@@ -67,14 +67,21 @@ depth histogram: 2:20
 
 ## Tokenizer: pinned, shared, never regenerated
 
-Chained models must speak the same token space, so model #2 **loads** a
+Chained models must speak the same token space, so model #2 **loads** the
 pinned tokenizer artifact shared with model/0 and refuses to train one
-(`data.py` raises if the file is missing rather than silently regenerating —
-the failure mode model/0's training script currently has). Until a versioned
-`tokenizer.model` is published, either train against an existing model/0
-artifact you keep fixed, or use the byte-level fallback (omit `--tokenizer`).
-Regenerating the tokenizer is a breaking change that retrains every model
-that shares it.
+(`data.py` raises if the file is missing rather than silently regenerating).
+The versioned artifact lives at the repo root:
+
+```
+tokenizer/v1/tokenizer.model   # SentencePiece BPE, vocab 8000, byte fallback
+tokenizer/v1/MANIFEST.json     # vocab, control tags, input corpora + hashes
+```
+
+It was produced once by `script/train_tokenizer.py` (model/0's trainer
+settings + the union of every `<src:…>`/`<tgt:…>`/`<sep>` control tag across
+models, each a single reserved symbol). Regenerating it is a breaking change
+that retrains every model sharing it — bump to `tokenizer/v2/` instead of
+overwriting. Omit `--tokenizer` for the byte-level fallback (smoke only).
 
 ## Data
 
@@ -82,6 +89,8 @@ Any plain-text file, one document per line. The gleaning script's model-0
 text output works directly:
 
 ```bash
+python ../../script/glean_datasets.py --model 2 --limit 500
+# -> ../../data/model/2/train_text.txt   (translation pairs, see TRANSLATION_DATA.md)
 python ../../script/glean_datasets.py --model 0 --limit 500
 # -> ../../data/model/0/train_text.txt
 ```
@@ -95,8 +104,8 @@ With no `--data`, training falls back to a deterministic synthetic corpus
 
 ```bash
 python train.py --config fp \
-  --data ../../data/model/0/train_text.txt \
-  --tokenizer path/to/pinned/tokenizer.model \
+  --data ../../data/model/2/train_text.txt \
+  --tokenizer ../../tokenizer/v1/tokenizer.model \
   --out checkpoints
 ```
 
@@ -122,7 +131,7 @@ Sweep the threshold and read the quality/compute trade-off:
 ```bash
 for t in 1e-3 5e-4 1e-4; do
   python generate.py --ckpt checkpoints/model2-fp.pt \
-    --tokenizer path/to/pinned/tokenizer.model \
+    --tokenizer ../../tokenizer/v1/tokenizer.model \
     --prompt "..." --kl-threshold $t --max-loops 16
 done
 ```
@@ -138,8 +147,8 @@ to add only if the training-free test underdelivers.
 
 ```bash
 python train.py --config ternary \
-  --data ../../data/model/0/train_text.txt \
-  --tokenizer path/to/pinned/tokenizer.model
+  --data ../../data/model/2/train_text.txt \
+  --tokenizer ../../tokenizer/v1/tokenizer.model
 ```
 
 The preset applies the whole b1.58 recipe: 2x width (512), ReLU² FFN,
@@ -167,7 +176,7 @@ budget the same GPU time as FP plus a small overhead.
 
 ```bash
 python generate.py --ckpt checkpoints/model2-fp.pt \
-  --tokenizer path/to/pinned/tokenizer.model \
+  --tokenizer ../../tokenizer/v1/tokenizer.model \
   --prompt "your prompt" \
   --max-new-tokens 128 \
   --kl-threshold 5e-4 --max-loops 16 \
@@ -236,8 +245,8 @@ composes with model/0** (the budget holds only with the tied head kept int8).
   drop usually recovers it. Small models are LR/WD-sensitive under QAT
   (BitNet-Reloaded); halve the peak LR before anything else.
 - **Tokenizer file not found** — deliberate: model #2 never trains a
-  tokenizer. Point `--tokenizer` at the pinned artifact or omit it for the
-  byte fallback (smoke only).
+  tokenizer. Point `--tokenizer` at `tokenizer/v1/tokenizer.model` (repo
+  root) or omit it for the byte fallback (smoke only).
 
 ## Next iteration: dual-level discrete core
 

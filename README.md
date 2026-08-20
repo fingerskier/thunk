@@ -40,13 +40,24 @@ Distributed-training strategy (Psyche/Solana evaluation, alternatives, and
 re-evaluation triggers) lives in
 [`DISTRIBUTED_TRAINING.md`](DISTRIBUTED_TRAINING.md).
 
+## Shared tokenizer
+All models in the chain share one pinned SentencePiece tokenizer,
+[`tokenizer/v1/tokenizer.model`](tokenizer/v1/) (vocab 8000, byte fallback,
+every `<src:…>`/`<tgt:…>`/`<sep>` control tag a single reserved symbol — see
+`tokenizer/v1/MANIFEST.json`). It is built once by
+`script/train_tokenizer.py` and then only loaded; changing it is a breaking
+change for every model, so publish a new `tokenizer/vN/` rather than
+overwriting.
+
 ## Dataset gleaning
 Use `script/glean_datasets.py` to sample public training-data repositories and
 no-key public APIs into
 `./data/`, which is ignored by git. The script is model-aware: `--model 0`
 emits seq2seq records (`source`/`target` plus `train_text.txt` for the v0
 Tokenizer workflow), while `--model 1` emits reasoning-diffuser records
-(`question`/`answer`). Use `--model all` to produce both shapes.
+(`question`/`answer`), and `--model 2` emits bidirectional translation pairs
+(`{tagged source} <sep> {target}` lines, see
+[`TRANSLATION_DATA.md`](TRANSLATION_DATA.md)). Use `--model all` for every shape.
 
 ```bash
 python script/glean_datasets.py --model all --limit 250
